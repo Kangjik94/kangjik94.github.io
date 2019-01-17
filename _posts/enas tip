@@ -1,0 +1,142 @@
+---
+layout: post
+title: Enas Errors and Tips / ENAS 코드를 window 10 Python 3.6에서 돌려보기
+---
+
+https://github.com/melodyguan/enas
+우선 여기서 다운로드를 받았다.
+나는 파이썬 3.6을 쓰고, tensorflow-gpu 1.2를 썼었음. conda는 python3.6버전을 깔았었고, cuda는 까먹음.
+GPU는 1080ti임. 
+파이썬 2.7로 되어있는 것 같았음. 이건 윈도우로 안되서 리눅스로 해야하지만 현재 듀얼 부팅하기 싫어서 그냥 3.6 파이썬으로 해보기로 했음.
+
+우선 난 cifar 10을 돌리는 것이 목적이기 때문에 src속 cifar10 main함수부터 건드리기로 했음.
+
+일단 돌리면 에러남.
+
+1. Cpickle 은 직렬화관련 모듈인데 2.7에서는 pickle도 있지만 C로 구현한 Cpickle이 더 빠름. 근데 3에서는 _pickle로 import 시켜야함. 다 바꾸자.
+
+2. 2.7에서의 print ad는 3에서 괄호를 넣어줘야하기때문에 모든 스크립트에서 print(ad)를 해줌.
+xrange도 2는 되도 range로 바꾸기만 해주면 됨.
+
+3. DEFINE_STRING에서 output_dir과 data_path가 없다고 나옴. DEFINE_string같은 경우 함수로 논문 구현팀에서 구현한 함수인데, 이걸 일부러 입력을 하라고 한듯. readme에 보면 cifar10 다운로드 받으라그래서 binary랑 python으로 둘 다 다운받았는 데, binary로 해봤더니 read부터 오류가 나길래 그냥 python으로 다운로드 받은 것으로 했음. 참고로 파일을 절대경로로 해주면 안됨.그냥 main.py있는 곳에 압축 푼 파일을 그대로 복붙한 뒤에
+DEFINE_string("data_path", "./cifar-10-batches-py (python)/", "./cifar-10-batches-py (python)/")
+DEFINE_string("output_dir", "output_dir", "output_dir")
+
+이런식으로 하면 됨.
+첫번째 인자는 FLAGS에 넣을 이름이고, 두번째는 디폴트 값이고, 세번째는 doc이라는 데, 뭐... 그냥 세번째 없으면 디폴트로 가는 것으로 알고 이렇게 넣었음. 저렇게 넣어야 지정한 파일 속으로 들어가는 듯. "./cifar폴더명"을 하자.
+
+output_dir는 굳이 폴더 안만들어도 여기 안에서 없으면 만들라고 되어잇으니 그냥 별로 신경 안써도 됨.
+
+사실 세번째 인자는 안건드려도 되고 그냥 두번째 인자에만 넣어도 될듯
+
+4. 이렇게 할시
+UnicodeDecodeError: 'cp949' codec can't decode byte 0x80 in position 0: illegal multibyte sequence
+이것은... 말 그대로 해석하자면 cp949 코덱은 0x80 byte로 된 것을 decode할 수 없다는 것인데... 
+내가 찾은 단서는...
+1. cifar10 데이터셋 원본은 이미지 파일 형태가 아니라 pickle 파일 포멧으로 되어있다.
+2. pickle로 데이터를 저장하거나 불러올 때는 파일을 바이트형식으로 읽거나 써야된다.
+이 말은 즉슨 open(파일명, "rb")로 써야된다는 것인데...
+3. load함수는 데이터를 한줄 읽어오는 것.
+4. 0x80은 UTF-8임.
+5. 파이썬 3에서는 ANSI 기준으로만 읽을 수 있고, UTF-8에서 작성한 파일은 에러난다.
+
+흠... 
+실험 1. codecs 모듈을 활용하여 codecs.open(파일명,"r","utf-8") 로 변경.
+-> 
+UnicodeDecodeError: 'utf-8' codec can't decode byte 0x80 in position 0: invalid start byte
+또 에러뜬다. 아무래도 byte형식인데 string형식으로 읽어서 그런가...
+
+실험 2. 바이트로 읽어야된다고 했으니
+codecs.open(full_name,'rb')로 했으나 안댐. 이번엔 이상하게 
+
+UnicodeDecodeError: 'ascii' codec can't decode byte 0x8b in position 6: ordinal not in range(128)
+이런 에러가 뜸. 흠.... 왜 또 ascii가 된거지.
+
+우선 내가 바꾼것은 기존 Cpickle을 다시 쓰면 되지 않을 까 싶어서 
+
+import six
+from six.moves import cPickle as pickle
+이거를 입력했다. 이건 data_utils에서만 바꿈. 다른데는 없어서 안바꿈
+
+하... 겨우 찾았다.
+d = pickle.load(f, encoding='latin1')
+이렇게 입력하면 된다.
+그럼 미니배치를 읽어들인다.
+
+
+5. 이번엔 
+AssertionError: Please specify --search_for
+이런 에러가 떴다. 
+main에서 내가 찾을 것에 대한 것을 명시 안해줬다. macro나 micro 둘 중 하나를 입력하면 된다.
+macro는 헷갈리지만 내가 알기로는 NAS같은 from scratch 방법이고 micro는 NASNet같은 셀을 탐색하는 search space다. 한마디로 search space를 명시 안해줬따. 해주자 난 macro로 하겠음.
+main.py
+DEFINE_string("search_for", "macro", "Must be [macro|micro]")
+
+6. 하... 이번에는 
+ValueError: slice index 0 of dimension 0 out of bounds. for 'child/layer_4/skip/strided_slice' (op: 'StridedSlice') with input shapes: [0], [1], [1], [1] and with computed input tensors: input[1] = <0>, input[2] = <1>, input[3] = <1>.
+Exception ignored in: <src.utils.Logger object at 0x000001F1317395F8>
+뭐 이런 에러가 뜬다
+
+이거는 찾아보니까 내가 아까 xrange를 바꿨던 그 xrange들이 아니라 그냥 range다. 기존 2에서의 xrange의 기능은 3에서는 range로 바꾸면 되지만 2에서의 range의 기능은 사라졌기 때문에 에러가 나는 것이였다. 그렇기 때문에. 
+x = tf.constant([i for i in range(1000)],dtype=tf.float32)로 하거나
+x = tf.constant (list(range(1000)),dtype=tf.float32)로 하라는 데... 
+range부분이 아닌 그 밑에서 out of bound가 난 이유는 range라는 건 있으니까 여기서는 에러가 없었겠지... 
+이거 일어나는 이유는 뭐
+2에서 하면 range(0,6)을 하면, list가 반환되는데, 3에서는 range하면 range0,6이 반환된다. 직접 해보면 암.
+그렇기 때문에 이거를 그냥 for i in layer_id로 했더니 당연 오류나고 다시 시도해보면 또 오류
+
+해결은... 내가 생각해보니까 cifar10_macro_search.sh에 있는 초기값들을 설정안했었다. 그래서 다 설정을 해놨더니 해결이 되었다. 단순히 인풋 사이즈가 안맞아서 그랬음
+
+7. 이제 돌아가나 싶었더니 무슨 또 
+[libprotobuf ERROR T:\src\github\protobuf\protobuf\src\google\protobuf\io\zero_copy_stream_impl_lite.cc:164] Cannot allocate buffer larger than kint32max for StringOutputStream.
+
+이런 에러가 뜬다.
+정확히는 GPU는 돌아가는 데 , 이상하게 안된다. 사용량은 0인데 GPU 메모리 사용량은 100이고...
+
+근데 중요한 것은 
+tensorflow.python.framework.errors_impl.CancelledError: TakeGrad operation was cancelled
+이런 에러도 뜨는 것이다. 같이 떴다.
+그래서 검색해보니까 쓰레드 문제인거같은데, 이 프로세스는 main이 죽고 돌아가야하는 것 같은데 나는 파이참에서 해서 main.py가 계속 살아있어서 생긴 오류인 것 같았다.
+
+그래서 anaconda prompt로 activate 환경이름 을 한 후에 python main.py를 했더니... 
+
+
+ModuleNotFoundError: No module named 'src'
+
+또 이런 오류가 떳다. src폴더를 왜 못찾지..
+하... 겨우 알아냈다. 
+다른거 다 필요없고 그냥 
+import sys 밑에다가 sys.path.append("../..")
+를 해서 enas-master 폴더 자체를 path에 지정하는 수 밖에 없었다.
+그러니까 됬따.
+이제 파이참에서 하지말고 prompt에서 실행시켜보자.
+
+알고보니 별 다른 이유가 아니라. 내가 텐서플로우 - gpu를 1.2를 썼었는데 다시 지우고 1.4로 올렸더니 실행됬다. 환경설정이 그만큼 중요하다. 끝
+
+
+그리고 돌려보니까 엄청 오래걸려서 아마 이게 7시간 인가 돌리는 것으로 알고 있다. 근데 생각보다 논문에서 나온 정도의 성능이 안나왔다.
+
+분명 readme에서 이걸로 돌려보고 macro_finish.sh로 돌려보라고 했었다. macro_finish는 실제로 구글이 돌리고 제일 좋은 정확도를 가진 모델과 설정들을 명시해놓은 것 같았다.
+
+그래서 설정을 macro_finish.sh 로 했더니 에러났다.
+macro_search.sh에서의 설정을 디폴트에서 바꾼 상태에서 바꿔서 그런가 싶어서 우선 원래 코드를 보면서 디폴트 값으로 다 바꾼 후에
+macro_finish.sh로 다시 설정을 다 해주었다.
+그래도 문제는 생겼다.
+fixed_arc에 내가 "$fixed_arc"로 했기 때문이였다. 
+이게 사실 배쉬 파일이라 파워쉘에서 실행시키면 알아서 arg로 들어가서 실행되는 건데 왜 이 고생을 하는 가 싶지만 
+어째뜬, powershell에서 저 fixed_arc를 echo"${fixed_arc}"하고 sleep 100000을 추가 작성하면  연결된 숫자들이 뜬다.
+이거는 fixed arc를 다 연결한 것이니 만약에 파워쉘 별로 하고 싶지않으면 그냥 0 3 0 1 0 2 4 뭐 이런식으로 직접 쓰던지 복붙해서 연결하던지 하자
+근데 이래도 에러가 나길래 무슨 문젠가 싶었더니 powershell에서 echo를 통해 출력하라고 해서 복사를 하면 그... 파워쉘 윈도우 사이즈까지 잘 하다가
+줄바꿈해서 출력을 하는 데 , 그렇게 되면 중간에 0 0 이렇게 띄어쓰기를 해야하는데 00 이렇게 붙어서 출력이 된다.
+그렇기 때문에 아무리 복붙을 하더라도 코드 속에서 꼼꼼히 다 띄어쓰기가 되어있는 지 확인을 해봐야한다.
+
+그렇게 되니까 지금 정상적으로 돌아간다. 그리고 정확도도 기존에 macro_search로 직접 찾았을 때 보다 훨씬 좋은 정확도로 현재 21 에폭인데 벌써 90을 찍었음.
+논문대로 나오려면 여기서 한 7퍼센튼가 6퍼센트 더 높아져야하는 데, 뭐 아직 돌아갈 에폭이 엄청 많으니 올라가리라 예상한다.
+아직 끝나진 않아서 확실히 말은 못하겠고...
+
+무튼 끝.
+
+다음에는 ENAS 코드를 분석하고, ENAS 논문을 설명하거나 그래야겠다.
+내가 처음이기도 하고 나만 보려고 하는 거라 굳이 글 정리를 하지 않았다. 누군가에게 보여주기 위한 것까지는 아니라 그냥 에러 난 거 정리하는 용도여서...
+앞으로는 강화학습과 RNN 그리고 ENAS 관련 논문들을 여기에 정리할 예정. 코딩도 그렇고.
+
